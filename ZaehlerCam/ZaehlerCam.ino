@@ -1,4 +1,14 @@
 /*
+  ZaehlerCam – ESP32-CAM meter reader for blinking 7-segment LCDs
+  Copyright (C) 2026 the ZaehlerCam authors
+
+  This program is free software: you can redistribute it and/or modify it under the terms of the
+  GNU General Public License as published by the Free Software Foundation, either version 3 of the
+  License, or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY; without
+  even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  See the GNU General Public License (file LICENSE) for more details.
+*/
+/*
   ZaehlerCam – ESP32-CAM liest eine 7-Segment-LCD-Anzeige aus und sendet den Wert per MQTT.
 
   Board:      "AI Thinker ESP32-CAM", PSRAM: Enabled
@@ -23,7 +33,7 @@
 #include "esp_camera.h"
 #include "img_converters.h"
 
-#define FW_VERSION "1.8.0"
+#define FW_VERSION "1.8.1"
 #define MAXD 8
 #define LED_CH 4          // LEDC-Kanal (nur Core 2.x), 0 ist von der Kamera belegt
 
@@ -635,7 +645,7 @@ String cleanVal(const char* t) { String s; for (; *t; t++) if (*t != ' ') s += *
 
 // ---------- Plausibilitaet ----------
 long long lastAcc = -1; String lastAccDigits = "", lastRej = ""; long long rejVal = -1; int rejN = 0;
-String bestPartial = ""; int partN = 0;   // beste Teil-Lesung (mit ?) der aktuellen Einschaltphase
+String bestPartial = "", lastValid = ""; int partN = 0;   // beste Teil-Lesung (mit ?) der aktuellen Einschaltphase
 
 String digitsOf(const String& s2) { String o; for (size_t i = 0; i < s2.length(); i++) if (s2[i] != '.' && s2[i] != ' ') o += s2[i]; return o; }
 String fmtVal(const String& digits) {   // Ziffern -> Zahl mit Nachkommastellen
@@ -708,6 +718,9 @@ void stepMachine() {
   uint32_t now = millis();
   if (!res.on) {
     if (stt == ST_SAMPLE && nv > 0) publishBest();
+    if (stt != ST_OFF && !pubThis && lastValid.length()) {   // Anzeige war nur kurz an: gueltige Lesung aus der Einschwingphase nachtragen
+      votes[0] = lastValid; nv = 1; Serial.println("[ZAEHLER] Anzeige war zu kurz an fuer die Messreihe - verwende die zuletzt gueltige Lesung"); publishBest();
+    }
     if (stt != ST_OFF) {
       if (!pubThis && !handlePartial()) {
         Serial.printf("[ZAEHLER] Display war an, aber KEIN gueltiger Wert gelesen (zuletzt gesehen: '%s', %d von %d Ziffern gueltig) -> Raster/Filter/Toleranz pruefen\n", lastOnTxt, lastOnNv, cfg.n);
@@ -722,18 +735,24 @@ void stepMachine() {
     String pc; for (const char* c = res.txt; *c; c++) { if (*c == '.') continue; pc += (*c == ' ') ? '?' : *c; }
     if ((int)pc.length() == cfg.n) { bestPartial = pc; partN = res.nvalid; }
   }
-  switch (stt) {
-    case ST_OFF: stt = ST_SETTLE; tSt = now; nv = 0; pubThis = false; bestPartial = ""; partN = 0; mqPub("display", "ON", false);
-      Serial.printf("[DISP] Display AN (Helligkeit %.0f, Kontrast %.0f, Schwelle %d)\n", res.mean, res.sd, res.thr); break;
-    case ST_SETTLE: if (cfg.dMode == 5 || now - tSt >= (uint32_t)cfg.dSettle) { stt = ST_SAMPLE; tSt = now; nv = 0; } break;
-    case ST_SAMPLE:
-      if (res.valid && nv < 16) votes[nv++] = String(res.txt);
-      if (nv >= cfg.dSamples) { publishBest(); stt = ST_DONE; tSt = now; }
-      else if (now - tSt > 5000) { publishBest(); stt = ST_DONE; tSt = now; }
-      break;
-    case ST_DONE:
-      if (cfg.dReeval > 0 && now - tSt > (uint32_t)cfg.dReeval * 1000UL) { stt = ST_SAMPLE; tSt = now; nv = 0; }
-      break;
+  if (res.valid) lastValid = String(res.txt);
+  for (bool again = true; again;) {   // Zustandswechsel im selben Bild weiterverarbeiten, damit bei sehr kurzer Anzeige kein Bild verloren geht
+    again = false;
+    switch (stt) {
+      case ST_OFF: stt = ST_SETTLE; tSt = now; nv = 0; pubThis = false; bestPartial = ""; partN = 0; lastValid = res.valid ? String(res.txt) : String(""); mqPub("display", "ON", false);
+        Serial.printf("[DISP] Display AN (Helligkeit %.0f, Kontrast %.0f, Schwelle %d)\n", res.mean, res.sd, res.thr);
+        if (cfg.dMode == 5) again = true;   // Erkennung beruht schon auf gelesenen Ziffern -> keine Einschwingzeit
+        break;
+      case ST_SETTLE: if (cfg.dMode == 5 || now - tSt >= (uint32_t)cfg.dSettle) { stt = ST_SAMPLE; tSt = now; nv = 0; again = true; } break;
+      case ST_SAMPLE:
+        if (res.valid && nv < 16) votes[nv++] = String(res.txt);
+        if (nv >= cfg.dSamples) { publishBest(); stt = ST_DONE; tSt = now; }
+        else if (now - tSt > 5000) { publishBest(); stt = ST_DONE; tSt = now; }
+        break;
+      case ST_DONE:
+        if (cfg.dReeval > 0 && now - tSt > (uint32_t)cfg.dReeval * 1000UL) { stt = ST_SAMPLE; tSt = now; nv = 0; }
+        break;
+    }
   }
 }
 

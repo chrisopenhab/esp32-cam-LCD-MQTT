@@ -1,6 +1,6 @@
 # ZaehlerCam – ESP32-CAM liest blinkende 7-Segment-LCDs
 
-🇬🇧 [English version](README.md)
+🇬🇧 [English version](README.md) · Lizenz: GPL-3.0-or-later
 
 Eine ESP32-CAM schaut auf das kleine LCD eines Zählers (z. B. Wärme-/kWh-Zähler), dessen Ziffern nur etwa **eine Sekunde alle paar Sekunden** sichtbar sind. Die Firmware erkennt, wann die Anzeige angeht, liest die 7-Segment-Ziffern, bildet über mehrere Bilder eine Mehrheitsentscheidung und veröffentlicht den Zählerstand per **MQTT**. Alles – Kamera, Display-Rahmen, Ziffern-Raster, Filter, MQTT, LED-Ring, Firmware-Update, Diagnose – wird in einer **Weboberfläche** (Deutsch/Englisch) eingestellt, die der ESP32 selbst bereitstellt. Es ist keine PC-Software nötig.
 
@@ -147,10 +147,13 @@ ZaehlerCam/ZaehlerCam.ino     Firmware + eingebettete Weboberfläche (eine Datei
 examples/                     Beispiel-Einstellungen des Autors (nur Rahmen/Raster/Filter/Erkennung)
 examples/openhab/             openHAB Things, Items, Persistence, Regeln
 README.md, README.de.md       Dokumentation
+LICENSE                       GNU GPL v3
 ```
 
 Die Beispiel-Einstellungen passen zu einer Kameraposition und einem Zähler; sie dienen nur als Beispiel für die JSON-Struktur. Teil-JSON-Dateien lassen sich importieren – fehlende Schlüssel behalten ihren Wert.
 
 ## Lizenz
 
-Es wurde noch keine Lizenz gewählt – vor der Veröffentlichung eine `LICENSE`-Datei (z. B. MIT) hinzufügen.
+Dieses Projekt steht unter der **GNU General Public License v3.0 oder später** – siehe [`LICENSE`](LICENSE). Du darfst es nutzen, ändern und weitergeben; abgeleitete Werke müssen unter derselben Lizenz und mit Quellcode weitergegeben werden. Es gibt keine Gewährleistung.
+
+Die Firmware nutzt die Bibliotheken ArduinoJson, PubSubClient, Adafruit NeoPixel und den arduino-esp32-Core, die ihre eigenen Lizenzen behalten (bei der Weitergabe von Binärdateien bitte deren aktuelle Lizenzbedingungen prüfen).

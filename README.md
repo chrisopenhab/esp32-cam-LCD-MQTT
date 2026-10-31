@@ -1,6 +1,6 @@
 # ZaehlerCam – ESP32-CAM meter reader for blinking 7-segment LCDs
 
-🇩🇪 [Deutsche Version](README.de.md)
+🇩🇪 [Deutsche Version](README.de.md) · License: GPL-3.0-or-later
 
 An ESP32-CAM looks at the small LCD of a meter (e.g. a heat/kWh meter) whose digits are only visible for about **one second every few seconds**. The firmware detects when the display switches on, reads the 7-segment digits, takes a majority vote over several frames and publishes the reading via **MQTT**. Everything – camera, display frame, digit grid, filters, MQTT, LED ring, firmware update, diagnostics – is configured in a **web interface** (German/English) served by the ESP32 itself. No PC software is needed.
 
@@ -147,10 +147,13 @@ ZaehlerCam/ZaehlerCam.ino     firmware + embedded web UI (single file)
 examples/                     example settings of the author's setup (frame/grid/filter/detection only)
 examples/openhab/             openHAB things, items, persistence, rules
 README.md, README.de.md       documentation
+LICENSE                       GNU GPL v3
 ```
 
 The example settings are tuned to one camera position and one meter; use them only as a reference of the JSON structure. Partial JSON files are fine for import – missing keys keep their current value.
 
 ## License
 
-No license has been chosen yet – add a `LICENSE` file (e.g. MIT) before publishing.
+This project is licensed under the **GNU General Public License v3.0 or later** – see [`LICENSE`](LICENSE). You may use, modify and redistribute it; derived works must be distributed under the same license with their source code. There is no warranty.
+
+The firmware uses these libraries, which keep their own licenses: ArduinoJson, PubSubClient, Adafruit NeoPixel and the arduino-esp32 core (please check their current license terms when redistributing binaries).
