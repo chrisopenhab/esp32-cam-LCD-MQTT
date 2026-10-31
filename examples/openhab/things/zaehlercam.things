@@ -1,0 +1,35 @@
+// openHAB 3.x / 4.x  –  conf/things/zaehlercam.things
+// Requires the "MQTT Binding"; the JSONPATH channel additionally needs the "JSONPath Transformation" add-on.
+// Adapt: broker host/credentials, topic prefix ("zaehlercam" = <base> topic set in the ZaehlerCam web UI).
+
+Bridge mqtt:broker:mosquitto [
+    host="192.168.0.10",
+    port=1883,
+    secure=false,
+    username="mqttuser",
+    password="CHANGE_ME",
+    clientID="openhab-zaehlercam"
+]
+
+Thing mqtt:topic:zaehlercam "ZaehlerCam" (mqtt:broker:mosquitto) [
+    // Thing goes OFFLINE automatically when the device is gone (last will "offline")
+    availabilityTopic="zaehlercam/status",
+    payloadAvailable="online",
+    payloadNotAvailable="offline"
+] {
+    Channels:
+        // The meter reading. Only plausible, fully read values arrive here (never values containing '?').
+        Type number : value     "Meter reading"       [ stateTopic="zaehlercam/value", unit="kWh" ]
+        // Digits exactly as read (string with leading zeros)
+        Type string : raw       "Raw digits"          [ stateTopic="zaehlercam/raw" ]
+        // ON while the LCD is on
+        Type switch : display   "Display detected"    [ stateTopic="zaehlercam/display", on="ON", off="OFF" ]
+        // Only published when the display was on but no valid reading was possible (e.g. 00?2123) – for debugging
+        Type string : seen      "Last unreadable text" [ stateTopic="zaehlercam/seen" ]
+        // Readings discarded by the plausibility check (smaller than last value / jump too large)
+        Type string : rejected  "Last rejected value" [ stateTopic="zaehlercam/rejected" ]
+        // Fields of the JSON message
+        Type number : uptime    "Uptime"              [ stateTopic="zaehlercam/json", transformationPattern="JSONPATH:$.uptime", unit="s" ]
+        Type string : valid     "Reading valid flag"  [ stateTopic="zaehlercam/json", transformationPattern="JSONPATH:$.valid" ]
+        Type string : recon     "Digits reconstructed" [ stateTopic="zaehlercam/json", transformationPattern="JSONPATH:$.reconstructed" ]
+}

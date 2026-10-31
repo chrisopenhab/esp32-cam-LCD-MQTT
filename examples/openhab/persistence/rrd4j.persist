@@ -1,0 +1,8 @@
+// conf/persistence/rrd4j.persist  –  charts (rrd4j needs a regular strategy in addition to everyChange)
+Strategies {
+    everyMinute : "0 * * * * ?"
+    default = everyChange
+}
+Items {
+    ZaehlerCam_Value, ZaehlerCam_Day, ZaehlerCam_Week : strategy = everyChange, everyMinute, restoreOnStartup
+}

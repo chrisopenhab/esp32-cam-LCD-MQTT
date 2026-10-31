@@ -1,0 +1,7 @@
+// conf/persistence/mapdb.persist  –  keeps the last value over openHAB restarts (no history, tiny)
+Strategies {
+    default = everyChange
+}
+Items {
+    ZaehlerCam_Value, ZaehlerCam_Raw : strategy = everyChange, restoreOnStartup
+}

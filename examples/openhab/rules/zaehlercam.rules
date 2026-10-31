@@ -1,0 +1,32 @@
+// conf/rules/zaehlercam.rules  (Rules DSL)  –  NOT tested against a running openHAB; syntax follows the openHAB 4 docs.
+// Uses the persistence service "rrd4j" (change the name if you use another one).
+
+// Consumption over the last 24 h / 7 days from the history of the meter reading
+rule "ZaehlerCam consumption"
+when
+    Item ZaehlerCam_Value changed or
+    System started
+then
+    val d = ZaehlerCam_Value.deltaSince(now.minusHours(24), "rrd4j")
+    val w = ZaehlerCam_Value.deltaSince(now.minusDays(7), "rrd4j")
+    if (d !== null) ZaehlerCam_Day.postUpdate(d)
+    if (w !== null) ZaehlerCam_Week.postUpdate(w)
+end
+
+// Watchdog: no new reading for 12 hours -> flag (the meter may be idle, the camera dead or the grid shifted)
+rule "ZaehlerCam stale check"
+when
+    Time cron "0 0/10 * * * ?"
+then
+    val last = ZaehlerCam_Value.lastUpdate("rrd4j")
+    if (last === null || last.isBefore(now.minusHours(12))) ZaehlerCam_Stale.postUpdate(ON)
+    else ZaehlerCam_Stale.postUpdate(OFF)
+end
+
+// Notify when the plausibility check keeps discarding values (misreading or meter replaced)
+rule "ZaehlerCam rejected value"
+when
+    Item ZaehlerCam_Rejected changed
+then
+    logWarn("zaehlercam", "Reading discarded by plausibility check: " + ZaehlerCam_Rejected.state.toString)
+end

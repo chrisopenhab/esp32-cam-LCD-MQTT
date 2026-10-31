@@ -1,0 +1,18 @@
+// conf/items/zaehlercam.items
+// Channel UID pattern: mqtt:topic:<bridge id>:<thing id>:<channel id>  ->  mqtt:topic:mosquitto:zaehlercam:value
+
+Group gZaehlerCam "ZaehlerCam" <energy>
+
+Number:Energy  ZaehlerCam_Value     "Meter reading [%d %unit%]"      <energy>   (gZaehlerCam) ["Measurement", "Energy"] { channel="mqtt:topic:mosquitto:zaehlercam:value" }
+String         ZaehlerCam_Raw       "Raw digits [%s]"                <text>     (gZaehlerCam) { channel="mqtt:topic:mosquitto:zaehlercam:raw" }
+Switch         ZaehlerCam_Display   "Display detected [%s]"          <screen>   (gZaehlerCam) { channel="mqtt:topic:mosquitto:zaehlercam:display" }
+String         ZaehlerCam_Seen      "Last unreadable text [%s]"      <error>    (gZaehlerCam) { channel="mqtt:topic:mosquitto:zaehlercam:seen" }
+String         ZaehlerCam_Rejected  "Last rejected value [%s]"      <error>    (gZaehlerCam) { channel="mqtt:topic:mosquitto:zaehlercam:rejected" }
+Number:Time    ZaehlerCam_Uptime    "Uptime [%d %unit%]"             <time>     (gZaehlerCam) { channel="mqtt:topic:mosquitto:zaehlercam:uptime" }
+String         ZaehlerCam_Valid     "Valid flag [%s]"                <none>     (gZaehlerCam) { channel="mqtt:topic:mosquitto:zaehlercam:valid" }
+String         ZaehlerCam_Recon     "Digits reconstructed [%s]"      <none>     (gZaehlerCam) { channel="mqtt:topic:mosquitto:zaehlercam:recon" }
+
+// Derived values, filled by the rule in rules/zaehlercam.rules
+Number:Energy  ZaehlerCam_Day       "Consumption last 24 h [%.0f %unit%]"  <energy> (gZaehlerCam)
+Number:Energy  ZaehlerCam_Week      "Consumption last 7 days [%.0f %unit%]" <energy> (gZaehlerCam)
+Switch         ZaehlerCam_Stale     "No new reading for > 12 h [%s]"        <alarm>  (gZaehlerCam)

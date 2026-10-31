@@ -1,0 +1,10 @@
+// conf/persistence/influxdb.persist  –  long-term history (needs the InfluxDB persistence add-on configured in the UI)
+// Every reading and every rejected value is stored, so you can graph plausibility problems later.
+Strategies {
+    everyHour : "0 0 * * * ?"
+    default = everyChange
+}
+Items {
+    ZaehlerCam_Value, ZaehlerCam_Day, ZaehlerCam_Week : strategy = everyChange, everyHour
+    ZaehlerCam_Rejected, ZaehlerCam_Seen, ZaehlerCam_Display : strategy = everyChange
+}

@@ -1,0 +1,10 @@
+build/
+*.bin
+*.elf
+*.map
+.vscode/
+.DS_Store
+# never commit exported settings: they contain WLAN/MQTT passwords
+zaehlercam-settings*.json
+zaehlercam-aufnahme-*.zip
+zaehlercam-video-*.webm
