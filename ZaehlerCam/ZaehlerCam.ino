@@ -33,7 +33,7 @@
 #include "esp_camera.h"
 #include "img_converters.h"
 
-#define FW_VERSION "1.8.1"
+#define FW_VERSION "1.9.0"
 #define MAXD 8
 #define LED_CH 4          // LEDC-Kanal (nur Core 2.x), 0 ist von der Kamera belegt
 
@@ -225,6 +225,31 @@ SemaphoreHandle_t mtx;                         // schuetzt cfg, res und Kamerazu
 volatile bool pendMq = false, mqUp = false, otaBusy = false;
 #define LOCK() xSemaphoreTake(mtx, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(mtx)
+
+// ---------- Selbstueberwachung (Watchdog, Neustart-Grund) ----------
+RTC_NOINIT_ATTR uint32_t rtcMagic;   // bleibt ueber einen Software-Neustart erhalten
+RTC_NOINIT_ATTR uint32_t rtcWhy;     // 1 = Hauptschleife haengt, 2 = WLAN dauerhaft weg, 3 = zu wenig Heap
+volatile uint32_t loopBeat = 0; uint32_t wifiReconn = 0; char rstTxt[96] = "";
+const char* resetName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON: return "Einschalten"; case ESP_RST_SW: return "Software-Neustart"; case ESP_RST_PANIC: return "ABSTURZ (Panic/Exception)";
+    case ESP_RST_INT_WDT: return "Interrupt-Watchdog"; case ESP_RST_TASK_WDT: return "Task-Watchdog"; case ESP_RST_WDT: return "Watchdog";
+    case ESP_RST_BROWNOUT: return "BROWNOUT (Spannungseinbruch!)"; case ESP_RST_EXT: return "Reset-Taste"; case ESP_RST_DEEPSLEEP: return "Deep-Sleep"; default: return "unbekannt";
+  }
+}
+const char* whyName(uint32_t w) { return w == 1 ? "Hauptschleife haengt" : w == 2 ? "WLAN dauerhaft weg" : w == 3 ? "zu wenig Heap" : "?"; }
+void selfRestart(uint32_t why, const char* txt) {
+  Serial.printf("[WD] Neustart wegen: %s (Heap %u, min %u)\n", txt, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+  rtcMagic = 0xC0FFEE42; rtcWhy = why; delay(200); ESP.restart();
+}
+void wdTask(void*) {   // eigener Task: laeuft auch, wenn die Hauptschleife am Mutex/der Kamera haengt
+  int lowN = 0;
+  for (;;) {
+    vTaskDelay(5000 / portTICK_PERIOD_MS);
+    if (millis() - loopBeat > 60000) selfRestart(1, "Hauptschleife reagiert seit 60 s nicht (Mutex/Kamera haengt?)");
+    if (ESP.getFreeHeap() < 12000) { if (++lowN >= 6) selfRestart(3, "freier Heap < 12 kB seit 30 s"); } else lowN = 0;
+  }
+}
 WiFiClient net;
 PubSubClient mq(net);
 bool camOk = false, apMode = false;
@@ -843,7 +868,7 @@ static esp_err_t hStatus(httpd_req_t* r) {
   d["rssi"] = WiFi.RSSI(); d["up"] = millis() / 1000; d["heap"] = ESP.getFreeHeap(); d["psram"] = ESP.getFreePsram();
   d["fw"] = FW_VERSION; d["build"] = __DATE__ " " __TIME__; d["cam"] = camOk; d["camEn"] = cfg.camEn; d["w"] = res.W; d["h"] = res.H;
   d["on"] = res.on; d["mean"] = res.mean; d["sd"] = res.sd; d["thr"] = res.thr; d["base"] = res.base;
-  d["txt"] = res.txt; d["valid"] = res.valid; d["raw"] = lastRaw; d["val"] = lastVal; d["rej"] = lastRej; d["acc"] = lastAccDigits; d["mq"] = (bool)mqUp;
+  d["txt"] = res.txt; d["valid"] = res.valid; d["raw"] = lastRaw; d["val"] = lastVal; d["rej"] = lastRej; d["acc"] = lastAccDigits; d["minheap"] = ESP.getMinFreeHeap(); d["rst"] = rstTxt; d["wrc"] = wifiReconn; d["mq"] = (bool)mqUp;
   JsonArray m = d["mask"].to<JsonArray>(); JsonArray fq = d["frac"].to<JsonArray>();
   for (int i = 0; i < cfg.n; i++) { m.add(res.mask[i]); JsonArray fr = fq.add<JsonArray>(); for (int k = 0; k < 7; k++) fr.add(res.frac[i][k]); }
   UNLOCK();
@@ -1087,6 +1112,9 @@ void setup() {
   delay(800);
   mtx = xSemaphoreCreateMutex();
   Serial.printf("\n[SYS] ZaehlerCam v%s, Build %s %s\n", FW_VERSION, __DATE__, __TIME__);
+  snprintf(rstTxt, sizeof(rstTxt), "%s", resetName(esp_reset_reason()));
+  if (rtcMagic == 0xC0FFEE42) { size_t l = strlen(rstTxt); snprintf(rstTxt + l, sizeof(rstTxt) - l, ", Watchdog: %s", whyName(rtcWhy)); rtcMagic = 0; }
+  Serial.printf("[SYS] Neustart-Grund: %s\n", rstTxt);
   cfgDefaults();
   LittleFS.begin(true);
   loadCfg();
@@ -1103,9 +1131,12 @@ void setup() {
   mqReconf();
 
   startHttp();
+  loopBeat = millis();
+  xTaskCreate(wdTask, "wd", 4096, NULL, 1, NULL);
 }
 
 void loop() {
+  loopBeat = millis();
   mqLoop();
   static uint32_t tw = 0, ts = 0, t = 0;
   if (millis() - tw > 15000) {
@@ -1113,6 +1144,29 @@ void loop() {
     if (cfg.ssid.length() && WiFi.status() != WL_CONNECTED)
       Serial.printf("[WLAN] nicht verbunden mit '%s', Status: %s\n", cfg.ssid.c_str(), wifiStatusName(WiFi.status()));
     else if (apMode && WiFi.status() == WL_CONNECTED) { apMode = false; WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA); }
+  }
+  {   // WLAN ueberwachen: bei Verlust neu verbinden, nach 5 min ohne Verbindung neu starten
+    static uint32_t downSince = 0, lastTry = 0;
+    if (cfg.ssid.length() && WiFi.status() != WL_CONNECTED) {
+      if (!downSince) downSince = millis();
+      if (millis() - lastTry > 30000) {
+        lastTry = millis(); wifiReconn++;
+        Serial.printf("[WLAN] seit %lu s getrennt -> neuer Verbindungsversuch Nr. %u\n", (unsigned long)((millis() - downSince) / 1000), (unsigned)wifiReconn);
+        WiFi.disconnect(false); WiFi.begin(cfg.ssid.c_str(), cfg.wpass.c_str());
+      }
+      if (!apMode && millis() - downSince > 300000UL) selfRestart(2, "WLAN seit 5 min nicht verbunden");
+    } else downSince = 0;
+  }
+  {   // Diagnose per MQTT alle 5 min (und direkt nach dem Verbinden)
+    static uint32_t td = 0; static bool first = true;
+    if (mqUp && (first || millis() - td > 300000UL)) {
+      first = false; td = millis();
+      char b[300];
+      snprintf(b, sizeof(b), "{\"fw\":\"%s\",\"uptime\":%lu,\"heap\":%u,\"minheap\":%u,\"psram\":%u,\"rssi\":%d,\"wifi_reconnects\":%u,\"reset\":\"%s\"}",
+               FW_VERSION, (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(), (unsigned)ESP.getFreePsram(), WiFi.RSSI(), (unsigned)wifiReconn, rstTxt);
+      mqPub("diag", String(b), false);
+    }
+    if (!mqUp) first = true;
   }
   if (millis() - ts > 30000) {
     ts = millis();
@@ -1367,7 +1421,7 @@ const I18N_PH=[['Änderung wird gesendet…','Sending change…'],['Live überno
 ['Hinweis: Geringe Reserve – die Erkennung kann im Betrieb schwanken.','Note: small margin – the detection may fluctuate in operation.'],
 ['Hinweis: In den AN-Bildern werden nur ','Note: in the ON images only '],[' Ziffern gelesen. Wenn die Anzeige da komplett sichtbar war, erst die Ziffern kalibrieren (🎯 Auto-Kalibrierung).',' digits are read. If the display was fully visible there, calibrate the digits first (🎯 Auto-calibration).'],
 ['Hinweis: Nur ','Note: only '],[' AN- und ',' ON and '],[' AUS-Muster – für sichere Werte je 3 oder mehr aufnehmen, auch bei anderem Licht.',' OFF samples – for reliable values record 3 or more of each, also under different lighting.'],
-['Helligkeit','Brightness'],['Kontrast','Contrast'],['Schwelle','Threshold'],['Ruhewert','Baseline'],['Erkannt','Detected'],['Letzter Wert','Last value'],['verbunden','connected'],['KAMERA FEHLER','CAMERA ERROR'],['Kamera aus','Camera off']].sort((a,b)=>b[0].length-a[0].length);
+['Laufzeit','Uptime'],['WLAN-Neuverbindungen','WLAN reconnects'],['Neustart-Grund','Reset reason'],['Software-Neustart','software restart'],['ABSTURZ (Panic/Exception)','CRASH (panic/exception)'],['BROWNOUT (Spannungseinbruch!)','BROWNOUT (voltage dip!)'],['Reset-Taste','reset button'],['Einschalten','power-on'],['Interrupt-Watchdog','interrupt watchdog'],['Task-Watchdog','task watchdog'],['Hauptschleife haengt','main loop hung'],['WLAN dauerhaft weg','WLAN lost permanently'],['zu wenig Heap','low heap'],['Helligkeit','Brightness'],['Kontrast','Contrast'],['Schwelle','Threshold'],['Ruhewert','Baseline'],['Erkannt','Detected'],['Letzter Wert','Last value'],['verbunden','connected'],['KAMERA FEHLER','CAMERA ERROR'],['Kamera aus','Camera off']].sort((a,b)=>b[0].length-a[0].length);
 const I18N_RX=[[/^Muster gespeichert: (AN|AUS) \(jetzt (\d+) an \/ (\d+) aus\)$/,(m,a,b,c)=>'Sample saved: '+(a=='AN'?'ON':'OFF')+' (now '+b+' on / '+c+' off)']];
 let LANG='de';const _lo=new WeakMap();
 function tr(s){if(LANG!='en'||!s)return s;const m=s.match(/^(\s*)([\s\S]*?)(\s*)$/),c=m[2];if(!c)return s;
@@ -1463,7 +1517,7 @@ function ota(){const f=$('fw').files[0];if(!f)return;const x=new XMLHttpRequest(
 async function imp(f){if(!f)return;const t=await f.text();try{JSON.parse(t)}catch(e){msg('Ungültige Datei');return}
  await fetch('/api/config?save=1',{method:'POST',headers:{'Content-Type':'application/json'},body:t});await load();msg('Importiert & gespeichert ✓')}
 setInterval(async()=>{try{st=await (await fetch('/api/status')).json()}catch(e){return}
- $('stat').innerHTML=`${hold?'<b>⏸ HOLD</b> · ':''}Display: <b>${st.on?'AN':'AUS'}</b> · Helligkeit ${st.mean.toFixed(0)} / Kontrast ${st.sd.toFixed(0)} · Schwelle ${st.thr}${st.base>0?' · Ruhewert '+st.base.toFixed(0):''} · Erkannt: <code>${st.txt||'–'}</code> ${st.valid?'✓':''} · Letzter Wert: <b>${st.val||'–'}</b> · MQTT: ${st.mq?'verbunden':'–'} · ${st.ip} · v${st.fw} (${st.build})${st.cam?'':(st.camEn?' · ⚠ KAMERA FEHLER':' · Kamera aus')}`;
+ $('stat').innerHTML=`${hold?'<b>⏸ HOLD</b> · ':''}Display: <b>${st.on?'AN':'AUS'}</b> · Helligkeit ${st.mean.toFixed(0)} / Kontrast ${st.sd.toFixed(0)} · Schwelle ${st.thr}${st.base>0?' · Ruhewert '+st.base.toFixed(0):''} · Erkannt: <code>${st.txt||'–'}</code> ${st.valid?'✓':''} · Letzter Wert: <b>${st.val||'–'}</b> · MQTT: ${st.mq?'verbunden':'–'} · ${st.ip} · v${st.fw} (${st.build}) · Laufzeit ${Math.floor(st.up/3600)} h · Heap ${(st.heap/1024)|0} kB (min ${(st.minheap/1024)|0} kB) · WLAN-Neuverbindungen ${st.wrc} · Neustart-Grund: ${st.rst}${st.cam?'':(st.camEn?' · ⚠ KAMERA FEHLER':' · Kamera aus')}`;
  if(tab==2)draw()},800);
 
 // ---------- Hold, Zustands-Muster, Sperre ----------

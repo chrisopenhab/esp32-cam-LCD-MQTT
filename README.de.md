@@ -43,6 +43,68 @@ Kamera ca. 10–15 cm vor dem LCD montieren und das **Objektiv von Hand scharfst
 - Partitionsschema: **Minimal SPIFFS (1.9 MB APP with OTA)** (oder Default 4MB with spiffs)
 - Bibliotheken (Library-Manager): **ArduinoJson 7.x**, **PubSubClient**, **Adafruit NeoPixel**
 
+## Firmware bauen (`.bin`)
+
+**1. Arduino IDE 2.x installieren:** <https://www.arduino.cc/en/software>.
+
+**2. ESP32-Boardpaket hinzufügen**
+- *Datei → Voreinstellungen → Zusätzliche Boardverwalter-URLs*, eintragen:
+  `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
+- *Werkzeuge → Board → Boardverwalter…* → nach **„esp32“** suchen → **„esp32 by Espressif Systems“** installieren (3.x; entwickelt und getestet mit 3.3.12, 2.0.17 funktioniert ebenfalls). Der Download ist groß (mehrere hundert MB), das dauert.
+
+**3. Bibliotheken installieren** (*Sketch → Bibliothek einbinden → Bibliotheken verwalten…*)
+
+| Bibliothek | Autor | Version |
+|---|---|---|
+| **ArduinoJson** | Benoit Blanchon | 7.x (nicht 6.x) |
+| **PubSubClient** | Nick O'Leary | aktuell |
+| **Adafruit NeoPixel** | Adafruit | aktuell |
+
+Alles Weitere (`WiFi`, `LittleFS`, `ESPmDNS`, `Update`, Kameratreiber) gehört zum ESP32-Paket.
+
+**4. Board und Optionen wählen** (Menü *Werkzeuge*)
+
+| Einstellung | Wert |
+|---|---|
+| Board | **ESP32 Arduino → AI Thinker ESP32-CAM** |
+| PSRAM | **Enabled** (falls im Menü vorhanden) |
+| Partition Scheme | **Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)** |
+| Port | der USB-Seriell-Adapter (nur für den Upload nötig) |
+
+**5. Kompilieren und Binärdatei exportieren**
+- `ZaehlerCam/ZaehlerCam.ino` öffnen (Ordnername = Dateiname).
+- *Sketch → Kompilierte Binärdatei exportieren* (Strg+Alt+S). Das kompiliert, ohne hochzuladen.
+- Die Dateien liegen im Sketch-Ordner unter `build/esp32.esp32.esp32cam/`:
+
+| Datei | Verwendung |
+|---|---|
+| **`ZaehlerCam.ino.bin`** | **die Anwendung – diese Datei über die Weboberfläche (OTA) hochladen** |
+| `ZaehlerCam.ino.bootloader.bin`, `ZaehlerCam.ino.partitions.bin` | nur für manuelles Flashen zusammen mit der Anwendung |
+| `ZaehlerCam.ino.merged.bin` | komplettes Abbild für einen leeren Chip (an Adresse `0x0` flashen, z. B. mit esptool oder dem Espressif-Web-Flasher) |
+
+**6. Flashen**
+- **Erstmals / leerer Chip:** *Sketch → Hochladen* mit GPIO 0 an GND während des Resets (siehe *Installation*), oder die `merged.bin` an `0x0` flashen.
+- **Danach:** Weboberfläche → *1 · System → Firmware-Update* → `ZaehlerCam.ino.bin` wählen → *Hochladen & flashen*. Das Gerät startet neu; Version/Build in der Kopfzeile prüfen.
+
+**Alternative auf der Kommandozeile (arduino-cli)** – vom Autor dieser Dokumentation nicht ausgeführt, bei abweichender Version anpassen:
+
+```bash
+arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli lib install "ArduinoJson" "PubSubClient" "Adafruit NeoPixel"
+arduino-cli compile --fqbn esp32:esp32:esp32cam --board-options PartitionScheme=min_spiffs --export-binaries ZaehlerCam
+# Ergebnis: ZaehlerCam/build/esp32.esp32.esp32cam/ZaehlerCam.ino.bin
+```
+
+**Typische Build-Probleme**
+
+| Meldung | Abhilfe |
+|---|---|
+| `ArduinoJson.h: No such file` | Bibliothek installieren (Schritt 3) |
+| `String(double, unsigned char)` ist mehrdeutig | alte Sketch-Version – die aktuelle verwenden |
+| `Sketch too big` / Partitionsfehler | falsches Partitionsschema (Schritt 4) |
+| Brown-out / Reset-Schleifen im Betrieb | schwache 5-V-Versorgung, siehe *Hardware* |
+
 ## Installation
 
 1. Ordner `ZaehlerCam/` (Ordnername = Name der `.ino`) in das Arduino-Sketchbook kopieren und `ZaehlerCam.ino` öffnen.
@@ -78,6 +140,7 @@ Kamera ca. 10–15 cm vor dem LCD montieren und das **Objektiv von Hand scharfst
 | `<base>/rejected` | vollständige Lesung, die die Plausibilitätsprüfung verworfen hat (Ziffern als Text) |
 | `<base>/seen` | nur wenn die Anzeige an war, aber **kein gültiger Wert** gelesen wurde: zuletzt gesehener Text, z. B. `00?2123` |
 | `<base>/status` | `online` / `offline` (Last Will, retained) |
+| `<base>/diag` | Gesundheits-JSON alle 5 min und nach dem Verbinden: Firmware, Laufzeit, freier/minimaler Heap, PSRAM, RSSI, WLAN-Neuverbindungen, letzter Reset-Grund |
 
 Optionen: *Immer senden* (jeden Wert) oder nur bei Änderung; *Retain* für value/raw.
 
@@ -128,9 +191,16 @@ Fertige Beispiele liegen in [`examples/openhab/`](examples/openhab/): MQTT-Thing
 | Ziffern `?` | Raster verschoben; schwaches Segment (oft der dünne obere Balken `a`); Toleranz 1, manuelle Schwelle senken (z. B. 4), auf scharfem Bild neu kalibrieren |
 | Auto-Kalibrierung scheitert | Bild unscharf oder Spiegelung → Objektiv fokussieren, LED-Helligkeit senken, Rahmen enger um die Ziffern, bei eingeschalteter Anzeige kalibrieren |
 | Display wird nie „an“ | Verfahren *Ziffern erkannt* nutzen; im gehaltenen AN-Bild müssen mindestens *N* Ziffern gelesen werden |
+| Gerät nach Stunden nicht erreichbar | Reset-Grund in der Kopfzeile bzw. in `<base>/diag` prüfen (`Brownout` → stärkeres 5-V-Netzteil, kurze dicke Kabel, 470–1000 µF Kondensator nahe am Board; `Watchdog` → serielles Log ansehen; sinkender `minheap` → Speicherleck, mit dem seriellen Log melden). Die Firmware verbindet das WLAN neu und startet selbst neu, ein Dauerausfall deutet deshalb auf Stromversorgung oder Router |
 | Oberfläche träge | schwaches Netzteil oder schlechtes WLAN; andere Tabs mit Livebild schließen |
 | LED-Ring lässt sich nicht ausschalten | falscher LED-Typ (der Ring ist WS2812B, nicht PWM) |
 | OTA zeigt alte Version | falsche `.bin` hochgeladen; Seite hart neu laden, Version/Build vergleichen |
+
+## Stabilität / Selbstüberwachung
+
+- **WLAN-Überwachung**: Bei Verbindungsverlust wird alle 30 s neu verbunden; nach 5 Minuten ohne WLAN startet die Firmware selbst neu.
+- **Watchdog-Task**: Reagiert die Hauptschleife 60 s lang nicht (z. B. hängende Kamera oder Sperre) oder bleibt der freie Heap 30 s unter 12 kB, startet das Gerät selbst neu.
+- Die Kopfzeile der Weboberfläche und `<base>/diag` zeigen Laufzeit, Heap (aktuell/minimal), WLAN-Neuverbindungen und den **Reset-Grund** (Einschalten, Software-Neustart + Watchdog-Ursache, Absturz/Panic, **Brownout** = Einbruch der Versorgungsspannung). Das serielle Log gibt ihn beim Start aus (`Neustart-Grund`). Ein stetig sinkender Minimal-Heap deutet auf ein Speicherleck hin, `Brownout` auf das Netzteil.
 
 ## Sicherheit
 

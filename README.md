@@ -43,6 +43,68 @@ Mount the camera ~10–15 cm in front of the LCD, **focus the lens by hand** (tu
 - Partition scheme: **Minimal SPIFFS (1.9 MB APP with OTA)** (or Default 4MB with spiffs)
 - Libraries (Library Manager): **ArduinoJson 7.x**, **PubSubClient**, **Adafruit NeoPixel**
 
+## Building the firmware (`.bin`)
+
+**1. Install the Arduino IDE 2.x** from <https://www.arduino.cc/en/software>.
+
+**2. Add the ESP32 board package**
+- *File → Preferences → Additional boards manager URLs*, add:
+  `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
+- *Tools → Board → Boards Manager…* → search **“esp32”** → install **“esp32 by Espressif Systems”** (3.x; developed and tested with 3.3.12, 2.0.17 also works). The download is large (several hundred MB), be patient.
+
+**3. Install the libraries** (*Sketch → Include Library → Manage Libraries…*)
+
+| Library | Author | Version |
+|---|---|---|
+| **ArduinoJson** | Benoit Blanchon | 7.x (not 6.x) |
+| **PubSubClient** | Nick O'Leary | current |
+| **Adafruit NeoPixel** | Adafruit | current |
+
+Everything else (`WiFi`, `LittleFS`, `ESPmDNS`, `Update`, camera driver) is part of the ESP32 package.
+
+**4. Select the board and options** (*Tools* menu)
+
+| Setting | Value |
+|---|---|
+| Board | **ESP32 Arduino → AI Thinker ESP32-CAM** |
+| PSRAM | **Enabled** (if the menu shows it) |
+| Partition Scheme | **Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)** |
+| Port | the USB-serial adapter (only needed for upload) |
+
+**5. Compile and export the binary**
+- Open `ZaehlerCam/ZaehlerCam.ino` (the folder name must equal the file name).
+- *Sketch → Export Compiled Binary* (Ctrl+Alt+S). This compiles without uploading.
+- The files appear in the sketch folder under `build/esp32.esp32.esp32cam/`:
+
+| File | Use |
+|---|---|
+| **`ZaehlerCam.ino.bin`** | **the application – upload this one via the web UI (OTA)** |
+| `ZaehlerCam.ino.bootloader.bin`, `ZaehlerCam.ino.partitions.bin` | only for manual flashing together with the app |
+| `ZaehlerCam.ino.merged.bin` | complete image for a blank chip (flash at address `0x0`, e.g. with esptool or the Espressif web flasher) |
+
+**6. Flash it**
+- **First time / blank chip:** *Sketch → Upload* with GPIO 0 tied to GND during reset (see *Installation*), or flash the `merged.bin` at `0x0`.
+- **Afterwards:** open the web UI → *1 · System → Firmware update* → choose `ZaehlerCam.ino.bin` → *Upload & flash*. The device restarts; check version/build in the header.
+
+**Command-line alternative (arduino-cli)** – not run by the author of this documentation, adapt if your version differs:
+
+```bash
+arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli lib install "ArduinoJson" "PubSubClient" "Adafruit NeoPixel"
+arduino-cli compile --fqbn esp32:esp32:esp32cam --board-options PartitionScheme=min_spiffs --export-binaries ZaehlerCam
+# result: ZaehlerCam/build/esp32.esp32.esp32cam/ZaehlerCam.ino.bin
+```
+
+**Typical build problems**
+
+| Message | Fix |
+|---|---|
+| `ArduinoJson.h: No such file` | install the library (step 3) |
+| `String(double, unsigned char)` is ambiguous | old sketch version – use the current one |
+| `Sketch too big` / partition error | wrong partition scheme (step 4) |
+| Brown-out / reset loops when running | weak 5 V supply, see *Hardware* |
+
 ## Installation
 
 1. Copy the folder `ZaehlerCam/` (the sketch folder name must equal the `.ino` name) into your Arduino sketchbook and open `ZaehlerCam.ino`.
@@ -78,6 +140,7 @@ Mount the camera ~10–15 cm in front of the LCD, **focus the lens by hand** (tu
 | `<base>/rejected` | a complete reading that the plausibility check discarded (digits as text) |
 | `<base>/seen` | only when the display was on but **no valid reading** was obtained: the last text seen, e.g. `00?2123` |
 | `<base>/status` | `online` / `offline` (last will, retained) |
+| `<base>/diag` | health JSON every 5 min and after connecting: firmware, uptime, free heap / minimum heap, PSRAM, RSSI, Wi-Fi reconnects, last reset reason |
 
 Options: *Always send* (every reading) or only when the value changed; *Retain* for value/raw.
 
@@ -128,9 +191,16 @@ Ready-to-use examples are in [`examples/openhab/`](examples/openhab/): MQTT thin
 | Digits `?` | segment grid shifted; faint segment (often the thin top bar `a`); try tolerance 1, lower manual threshold (e.g. 4), re-calibrate on a sharp frame |
 | Auto-calibration fails | image blurry or glare → focus lens, reduce LED brightness, draw frame closer around the digits, calibrate while the display stays on |
 | Display never “on” | use method *Digits recognised*; make sure the grid reads at least *N* digits in the *held* ON image |
+| Device unreachable after hours | check the reset reason in the header / `<base>/diag` (`brownout` → stronger 5 V supply, short thick cables, 470–1000 µF capacitor near the board; `Watchdog` → see serial log; falling `minheap` → memory leak, report it with the serial log). The firmware reconnects Wi-Fi and reboots itself, so a permanent outage points to power or the router |
 | UI very slow / stalls | weak power supply or poor Wi-Fi; close other tabs with the live preview |
 | LED ring does not switch off | wrong LED type (ring is WS2812B, not PWM) |
 | OTA shows old version | uploaded the wrong `.bin`; hard-reload the page and compare version/build |
+
+## Stability / self-monitoring
+
+- **Wi-Fi supervision**: if the connection is lost the firmware reconnects every 30 s; after 5 minutes without Wi-Fi it restarts itself.
+- **Watchdog task**: if the main loop does not respond for 60 s (e.g. a stuck camera or lock) or free heap stays below 12 kB for 30 s, the device restarts itself.
+- The header of the web UI and `<base>/diag` show uptime, heap (current/minimum), Wi-Fi reconnects and the **reset reason** (power-on, software restart + watchdog cause, crash/panic, **brownout** = supply voltage dip). The serial log prints it at boot (`Neustart-Grund`). A steadily falling minimum heap indicates a memory leak; `brownout` points to the power supply.
 
 ## Security
 
